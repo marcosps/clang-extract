@@ -20,6 +20,10 @@
 #include "PrettyPrint.hh"
 #include "Error.hh"
 #include "LLVMMisc.hh"
+#include "IntervalTree.hh"
+
+/* IntervalTree.  */
+using namespace Intervals;
 
 /** Add a decl to the Dependencies set and all its previous declarations in the
     AST. A function can have multiple definitions but its body may only be
@@ -570,6 +574,11 @@ void FunctionDependencyFinder::Print(void)
 void FunctionDependencyFinder::Remove_Redundant_Decls(void) {
   std::unordered_set<Decl *> &closure_set = Closure.Get_Set();
 
+
+  /* Interval Tree to compute intersections of changes.  We can't have
+     intersections so if we find those we try to solve them.  */
+  IntervalTree<SourceLocation, TagDecl> interval_tree;
+
   for (auto it = closure_set.begin(); it != closure_set.end(); ++it) {
     /* Handle the case where a enum or struct is declared as:
 
@@ -608,6 +617,9 @@ void FunctionDependencyFinder::Remove_Redundant_Decls(void) {
       const clang::Type *type = decl->getTypeForDecl();
       if (type) {
         TagDecl *typedecl = type->getAsTagDecl();
+
+        const SourceLocation sl = typedecl->getLocation();
+        interval_tree.insert(Interval<SourceLocation, TagDecl>(sl, typedecl));
 
         if (typedecl && Closure.Is_Decl_Marked(typedecl)) {
           SourceRange type_range = typedecl->getSourceRange();
@@ -649,8 +661,14 @@ void FunctionDependencyFinder::Remove_Redundant_Decls(void) {
          * previous declaration in the same code range, since the later will
          * contain both definitions either way.
          */
-        if (Decl *range_decl = Closure.insideRangeOfDecl(decl))
-          Closure.Remove_Decl(range_decl);
+
+        /* Check if we already have this range in the tree.  */
+        auto overlap = interval_tree.findOverlappingIntervals(Interval<SourceLocation, TagDecl>(sl));
+        if (overlap.size() > 0) {
+          TagDecl *rm_decl = overlap[0].value;
+          Closure.Remove_Decl(rm_decl);
+          interval_tree.remove(Interval<SourceLocation, TagDecl>(sl, rm_decl));
+        }
       }
     }
     /* Handle the case where an enum is declared as:
